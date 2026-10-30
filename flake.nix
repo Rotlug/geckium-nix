@@ -150,12 +150,11 @@
         (if replaceFirefoxEntry then pkgs.lib.hiPrio else pkgs.lib.id) (pkgs.symlinkJoin {
           name = "geckium-firefox";
           paths = [ launcher ];
-          # Reuse the stock Firefox desktop entry, pointed at the launcher.
+          # Reuse the stock Firefox desktop entry (name included); only the launcher,
+          # window class and icon change.
           postBuild = ''
             mkdir -p $out/share/applications
-            sed -e '/^Name\[/d' -e '/^GenericName\[/d' -e '/^Comment\[/d' \
-                -e '0,/^Name=/s/^Name=.*/Name=Geckium${if withAero then " (Aero)" else ""}/' \
-                -e 's/^Exec=firefox --name firefox/Exec=geckium-firefox/' \
+            sed -e 's/^Exec=firefox --name firefox/Exec=geckium-firefox/' \
                 -e 's/^Exec=firefox/Exec=geckium-firefox/' \
                 -e 's/^StartupWMClass=.*/StartupWMClass=geckium-firefox/' \
                 -e 's/^Icon=.*/Icon=geckium-firefox/' \
@@ -211,7 +210,7 @@
               default = true;
               description = ''
                 Add Aero UserChrome's `shadow.css` to `~/.config/gtk-3.0/gtk.css`
-                (through `gtk.gtk3.extraCss`). Only used when `withAero` is set.
+                (through `xdg.configFile`, or `gtk.gtk3.extraCss` when `gtk.enable` is set). Only used when `withAero` is set.
                 Note this applies to every GTK3 client-side-decorated window.
               '';
             };
@@ -237,7 +236,15 @@
               })
             ];
 
-            gtk.gtk3.extraCss = lib.mkIf (cfg.withAero && cfg.gtkShadow) (
+            # Written through xdg.configFile rather than gtk.gtk3.extraCss: that is
+            # ignored unless gtk.enable is set, and enabling it would also make
+            # Home Manager take over (and replace) KDE's gtk-3.0/settings.ini.
+            xdg.configFile."gtk-3.0/gtk.css" = lib.mkIf (cfg.withAero && cfg.gtkShadow && !config.gtk.enable) {
+              # Keep KDE's generated colours (colors.css, from kde-gtk-config), since
+              # this file replaces the gtk.css KDE would write.
+              text = "@import 'colors.css';\n" + builtins.readFile "${mkAero pkgs}/GTK/shadow.css";
+            };
+            gtk.gtk3.extraCss = lib.mkIf (cfg.withAero && cfg.gtkShadow && config.gtk.enable) (
               builtins.readFile "${mkAero pkgs}/GTK/shadow.css"
             );
           };
