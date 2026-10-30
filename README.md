@@ -68,6 +68,40 @@ copy `GTK/shadow.css` from `packages.aero-userchrome` yourself.
 }
 ```
 
+### Using it together with `programs.firefox`
+
+If `programs.firefox.enable = true`, the module sets `programs.firefox.package`
+to Geckium's wrapped Firefox (at `mkDefault` priority), and the `geckium-firefox`
+launcher runs `programs.firefox.finalPackage`. So your existing `policies`
+(e.g. `ExtensionSettings` with uBlock Origin force-installed) apply to Geckium
+too. Just enable both:
+
+```nix
+{ inputs, ... }:
+{
+  imports = [ inputs.geckium.homeManagerModules.default ];
+
+  programs.geckium.enable = true; # add withAero = true; for Aero
+
+  programs.firefox = {
+    enable = true;
+    policies.ExtensionSettings = {
+      "*".installation_mode = "blocked";
+      "uBlock0@raymondhill.net" = {
+        install_url = "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi";
+        installation_mode = "force_installed";
+      };
+    };
+  };
+}
+```
+
+Notes: Geckium runs from its own profile (`~/.local/share/geckium/profile`), so
+`programs.firefox.profiles.*` settings do not carry over to it; policies,
+`nativeMessagingHosts` and other wrapper-level options do. Your normal
+`firefox` binary from `programs.firefox` will also have Geckium's autoconfig
+baked in, but without the Geckium profile it looks like stock Firefox.
+
 With `withAero = false` the module only installs the plain Geckium launcher and
 leaves your GTK config alone.
 

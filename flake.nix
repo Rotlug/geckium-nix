@@ -75,8 +75,9 @@
           };
         };
 
-      # Aero is opt-in: `withAero = false` (default) gives plain Geckium.
-      mkFirefox =
+      # The Geckium-enabled wrapped Firefox (a regular wrapFirefox result, so
+      # Home Manager's programs.firefox can layer policies on top of it).
+      mkWrappedFirefox =
         pkgs:
         {
           withAero ? false,
@@ -85,50 +86,81 @@
         }:
         let
           geckium = mkGeckium pkgs;
-          aero = mkAero pkgs;
-          firefox = pkgs.wrapFirefox pkgs.firefox-unwrapped {
-            # Geckium's install-dir config.js is fx-autoconfig; nixpkgs already
-            # sets up autoconfig (mozilla.cfg), so append it there.
-            extraPrefsFiles = [ "${geckium}/config.js" ];
-            extraAutoConfig = ''
-              pref("general.config.sandbox_enabled", false);
-            '';
-            extraPrefs = pkgs.lib.optionalString withAero ''
-              defaultPref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
-              defaultPref("widget.gtk.rounded-bottom-corners.enabled", true);
-              defaultPref("aero-userchrome.alternative", ${if aeroStyle == "vista" then "true" else "false"});
-            '';
-          };
-          variant = if withAero then "${geckium.version}+aero-${aero.version}" else geckium.version;
-          importLine = ''@import url("Aero/Geckium.css"); /* geckium-nix:aero */'';
         in
         assert pkgs.lib.assertOneOf "aeroStyle" aeroStyle [
           "7"
           "vista"
         ];
-        pkgs.writeShellScriptBin "geckium-firefox" ''
-          set -eu
-          profile="''${GECKIUM_PROFILE:-''${XDG_DATA_HOME:-$HOME/.local/share}/geckium/profile}"
-          stamp="$profile/.geckium-nix-version"
+        pkgs.wrapFirefox pkgs.firefox-unwrapped {
+          # Geckium's install-dir config.js is fx-autoconfig; nixpkgs already
+          # sets up autoconfig (mozilla.cfg), so append it there.
+          extraPrefsFiles = [ "${geckium}/config.js" ];
+          extraAutoConfig = ''
+            pref("general.config.sandbox_enabled", false);
+          '';
+          extraPrefs = pkgs.lib.optionalString withAero ''
+            defaultPref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
+            defaultPref("widget.gtk.rounded-bottom-corners.enabled", true);
+            defaultPref("aero-userchrome.alternative", ${if aeroStyle == "vista" then "true" else "false"});
+          '';
+        };
 
-          mkdir -p "$profile"
-          [ -d "$profile/chrThemes" ] || cp -r --no-preserve=mode ${geckium}/chrThemes "$profile/"
+      # Aero is opt-in: `withAero = false` (default) gives plain Geckium.
+      # `firefox` can be any wrapped Firefox built with mkWrappedFirefox, e.g.
+      # Home Manager's `programs.firefox.finalPackage`.
+      mkFirefox =
+        pkgs:
+        {
+          withAero ? false,
+          aeroStyle ? "7",
+          firefox ? mkWrappedFirefox pkgs { inherit withAero aeroStyle; },
+        }:
+        let
+          geckium = mkGeckium pkgs;
+          aero = mkAero pkgs;
+          variant = if withAero then "${geckium.version}+aero-${aero.version}" else geckium.version;
+          importLine = ''@import url("Aero/Geckium.css"); /* geckium-nix:aero */'';
+          launcher = pkgs.writeShellScriptBin "geckium-firefox" ''
+            set -eu
+            profile="''${GECKIUM_PROFILE:-''${XDG_DATA_HOME:-$HOME/.local/share}/geckium/profile}"
+            stamp="$profile/.geckium-nix-version"
 
-          # New Geckium/Aero version or variant: rebuild the chrome folder and
-          # clear the startup cache.
-          if [ "$(cat "$stamp" 2>/dev/null || true)" != "${variant}" ]; then
-            rm -rf "$profile/chrome"
-            cp -r --no-preserve=mode ${geckium}/chrome "$profile/"
-            ${pkgs.lib.optionalString withAero ''
-              cp -r --no-preserve=mode ${aero}/chrome/. "$profile/chrome/"
-              printf '\n%s\n' '${importLine}' >> "$profile/chrome/userChrome.css"
-            ''}
-            rm -rf "$profile/startupCache"
-            echo "${variant}" > "$stamp"
-          fi
+            mkdir -p "$profile"
+            [ -d "$profile/chrThemes" ] || cp -r --no-preserve=mode ${geckium}/chrThemes "$profile/"
 
-          exec ${firefox}/bin/firefox --profile "$profile" "$@"
-        '';
+            # New Geckium/Aero version or variant: rebuild the chrome folder and
+            # clear the startup cache.
+            if [ "$(cat "$stamp" 2>/dev/null || true)" != "${variant}" ]; then
+              rm -rf "$profile/chrome"
+              cp -r --no-preserve=mode ${geckium}/chrome "$profile/"
+              ${pkgs.lib.optionalString withAero ''
+                cp -r --no-preserve=mode ${aero}/chrome/. "$profile/chrome/"
+                printf '\n%s\n' '${importLine}' >> "$profile/chrome/userChrome.css"
+              ''}
+              rm -rf "$profile/startupCache"
+              echo "${variant}" > "$stamp"
+            fi
+
+            exec ${firefox}/bin/firefox --name geckium-firefox --profile "$profile" "$@"
+          '';
+        in
+        pkgs.symlinkJoin {
+          name = "geckium-firefox";
+          paths = [ launcher ];
+          # Reuse the stock Firefox desktop entry and icons, pointed at the launcher.
+          postBuild = ''
+            mkdir -p $out/share/applications
+            sed -e '/^Name\[/d' -e '/^GenericName\[/d' -e '/^Comment\[/d' \
+                -e '0,/^Name=/s/^Name=.*/Name=Geckium${if withAero then " (Aero)" else ""}/' \
+                -e 's/^Exec=firefox --name firefox/Exec=geckium-firefox/' \
+                -e 's/^Exec=firefox/Exec=geckium-firefox/' \
+                -e 's/^StartupWMClass=.*/StartupWMClass=geckium-firefox/' \
+                ${firefox}/share/applications/firefox.desktop \
+                > $out/share/applications/geckium-firefox.desktop
+            ln -s ${firefox}/share/icons $out/share/icons
+          '';
+          meta.mainProgram = "geckium-firefox";
+        };
     in
     {
       packages = forAllSystems (pkgs: {
@@ -140,6 +172,7 @@
 
       # For consumers: inputs.geckium.lib.mkGeckiumFirefox pkgs { withAero = true; aeroStyle = "vista"; }
       lib.mkGeckiumFirefox = mkFirefox;
+      lib.mkWrappedGeckiumFirefox = mkWrappedFirefox;
 
       homeManagerModules.default = self.homeManagerModules.geckium;
       homeManagerModules.geckium =
@@ -179,9 +212,20 @@
           };
 
           config = lib.mkIf cfg.enable {
+            # If programs.firefox is enabled, use Geckium's wrapped Firefox as its
+            # package so its policies, extensions, etc. also apply to Geckium.
+            programs.firefox.package = lib.mkIf config.programs.firefox.enable (
+              lib.mkDefault (mkWrappedFirefox pkgs { inherit (cfg) withAero aeroStyle; })
+            );
+
             home.packages = [
               (mkFirefox pkgs {
                 inherit (cfg) withAero aeroStyle;
+                firefox =
+                  if config.programs.firefox.enable then
+                    config.programs.firefox.finalPackage
+                  else
+                    mkWrappedFirefox pkgs { inherit (cfg) withAero aeroStyle; };
               })
             ];
 
