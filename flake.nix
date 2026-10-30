@@ -114,6 +114,9 @@
           withAero ? false,
           aeroStyle ? "7",
           firefox ? mkWrappedFirefox pkgs { inherit withAero aeroStyle; },
+          # Ship the desktop entry as `firefox.desktop` (with high priority) so it
+          # replaces the stock Firefox entry instead of adding a second one.
+          replaceFirefoxEntry ? false,
         }:
         let
           geckium = mkGeckium pkgs;
@@ -144,10 +147,10 @@
             exec ${firefox}/bin/firefox --name geckium-firefox --profile "$profile" "$@"
           '';
         in
-        pkgs.symlinkJoin {
+        (if replaceFirefoxEntry then pkgs.lib.hiPrio else pkgs.lib.id) (pkgs.symlinkJoin {
           name = "geckium-firefox";
           paths = [ launcher ];
-          # Reuse the stock Firefox desktop entry and icons, pointed at the launcher.
+          # Reuse the stock Firefox desktop entry, pointed at the launcher.
           postBuild = ''
             mkdir -p $out/share/applications
             sed -e '/^Name\[/d' -e '/^GenericName\[/d' -e '/^Comment\[/d' \
@@ -155,12 +158,15 @@
                 -e 's/^Exec=firefox --name firefox/Exec=geckium-firefox/' \
                 -e 's/^Exec=firefox/Exec=geckium-firefox/' \
                 -e 's/^StartupWMClass=.*/StartupWMClass=geckium-firefox/' \
+                -e 's/^Icon=.*/Icon=geckium-firefox/' \
                 ${firefox}/share/applications/firefox.desktop \
-                > $out/share/applications/geckium-firefox.desktop
-            ln -s ${firefox}/share/icons $out/share/icons
+                > $out/share/applications/${if replaceFirefoxEntry then "firefox" else "geckium-firefox"}.desktop
+            # Geckium ships the 2009-era Firefox logo; use it as the icon.
+            install -Dm444 "${geckium}/chrome/windows/gsettings/imgs/browsers/firefox-2009.png" \
+              $out/share/icons/hicolor/512x512/apps/geckium-firefox.png
           '';
           meta.mainProgram = "geckium-firefox";
-        };
+        });
     in
     {
       packages = forAllSystems (pkgs: {
@@ -221,6 +227,8 @@
             home.packages = [
               (mkFirefox pkgs {
                 inherit (cfg) withAero aeroStyle;
+                # One menu entry: Geckium takes over Firefox's own desktop file.
+                replaceFirefoxEntry = config.programs.firefox.enable;
                 firefox =
                   if config.programs.firefox.enable then
                     config.programs.firefox.finalPackage
